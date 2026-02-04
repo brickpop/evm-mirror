@@ -1,4 +1,4 @@
-export const MIRROR_VERSION = "0.14.0";
+export const MIRROR_VERSION = "0.14.1";
 
 export const DEFAULT_SOLC_VERSION = "0.8.28";
 

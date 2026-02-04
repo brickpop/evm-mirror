@@ -50,6 +50,7 @@ function parseVerifiedSources(
       evmVersion: apiResult.evm_version,
       contractFileName: apiResult.file_path,
       contractName: apiResult.name,
+      remappings: apiResult.compiler_settings?.remappings || [],
     },
   };
 

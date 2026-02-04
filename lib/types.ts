@@ -14,6 +14,7 @@ export type CompilerMeta = {
   evmVersion: string; // "paris" or "Default"
   contractFileName: string; // "src/Token.sol"
   contractName: string; // "Token"
+  remappings: string[]; // ["@openzeppelin/=lib/openzeppelin/", ...]
 };
 
 export type ContractSourcesWithMeta = ContractSources & {
