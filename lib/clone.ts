@@ -18,20 +18,11 @@ export async function cloneContract(
     gray(`Cloning ${bold(meta.contractName)} to ${bold(outputDir)}\n`),
   );
 
-  // Detect remappings from source paths
   const paths = Object.keys(sources);
-  const remappings = detectRemappings(paths);
 
-  // Transform paths and write source files
-  const transformedSources: Record<string, string> = {};
-  for (const [path, content] of Object.entries(sources)) {
-    transformedSources[transformPath(path)] = content;
-  }
-
-  console.log(
-    gray(`Writing ${Object.keys(transformedSources).length} source files...`),
-  );
-  await writeSourceFiles(transformedSources, outputDir);
+  // Write source files preserving original paths
+  console.log(gray(`Writing ${paths.length} source files...`));
+  await writeSourceFiles(sources, outputDir);
 
   // Check for Vyper contracts
   if (meta.compilerVersion.toLowerCase().includes("vyper")) {
@@ -46,6 +37,9 @@ export async function cloneContract(
     return;
   }
 
+  // Check if any paths use node_modules (Hardhat-style)
+  const hasNodeModules = paths.some((p) => p.startsWith("node_modules/"));
+
   // Detect source root from contract file name
   const srcDir = detectSourceRoot(meta.contractFileName);
 
@@ -55,6 +49,7 @@ export async function cloneContract(
     srcDir,
     contractInfo.address,
     networkData,
+    hasNodeModules,
   );
   const foundryPath = join(outputDir, "foundry.toml");
   await writeFileWithCheck(foundryPath, foundryConfig);
@@ -64,17 +59,17 @@ export async function cloneContract(
     ),
   );
 
-  // Generate remappings.txt if needed
-  if (remappings) {
-    const remappingsContent =
-      Object.entries(remappings)
-        .map(([from, to]) => `${from}=${to}`)
-        .join("\n") + "\n";
+  // Generate remappings.txt - use metadata if available, otherwise detect from paths
+  const remappings =
+    meta.remappings.length > 0 ? meta.remappings : detectRemappingsFromPaths(paths);
+
+  if (remappings.length > 0) {
+    const remappingsContent = remappings.join("\n") + "\n";
     const remappingsPath = join(outputDir, "remappings.txt");
     await writeFileWithCheck(remappingsPath, remappingsContent);
     console.log(
       gray(
-        `Generated ${bold("remappings.txt")} (${Object.keys(remappings).length} ${Object.keys(remappings).length === 1 ? "entry" : "entries"})`,
+        `Generated ${bold("remappings.txt")} (${remappings.length} ${remappings.length === 1 ? "entry" : "entries"})`,
       ),
     );
   }
@@ -85,6 +80,19 @@ export async function cloneContract(
 }
 
 /**
+ * Transform bare @-prefixed paths to lib/:
+ * - "@openzeppelin/..." → "lib/@openzeppelin/..."
+ * - "node_modules/..." paths are kept as-is (Foundry uses libs = ["node_modules"])
+ * - All other paths remain unchanged
+ */
+function transformPath(originalPath: string): string {
+  if (originalPath.startsWith("@")) {
+    return `lib/${originalPath}`;
+  }
+  return originalPath;
+}
+
+/**
  * Write all source files respecting overwrite rules
  */
 async function writeSourceFiles(
@@ -92,7 +100,8 @@ async function writeSourceFiles(
   outputDir: string,
 ): Promise<void> {
   for (const [path, content] of Object.entries(sources)) {
-    const fullPath = join(outputDir, path);
+    const transformedPath = transformPath(path);
+    const fullPath = join(outputDir, transformedPath);
     await writeFileWithCheck(fullPath, content, true);
   }
 }
@@ -135,22 +144,29 @@ async function writeFileWithCheck(
 
 /**
  * Detect src folder from ContractFileName (e.g., "src/Token.sol" → "src")
- * Uses the transformed path logic to determine where files will end up.
+ * Handles:
+ * - "src/Token.sol" → "src"
+ * - "contracts/Token.sol" → "contracts"
+ * - "@openzeppelin/contracts/proxy/Proxy.sol" → "lib" (bare @ paths go to lib/)
+ * - "node_modules/@openzeppelin/contracts/proxy/Proxy.sol" → "node_modules"
  */
 export function detectSourceRoot(contractFileName: string): string {
   if (!contractFileName) return "src";
 
-  // Files starting with @ or node_modules/@ get transformed to lib/
-  if (
-    contractFileName.startsWith("@") ||
-    contractFileName.startsWith("node_modules/@")
-  ) {
-    return "lib";
-  }
-
   const parts = contractFileName.split("/");
   if (parts.length > 1) {
     const firstSegment = parts[0];
+
+    // Bare @-prefixed paths are transformed to lib/
+    if (firstSegment.startsWith("@")) {
+      return "lib";
+    }
+
+    // node_modules paths stay as-is
+    if (firstSegment === "node_modules") {
+      return "node_modules";
+    }
+
     // Common source directories
     if (["src", "contracts", "source", "packages"].includes(firstSegment)) {
       return firstSegment;
@@ -159,49 +175,27 @@ export function detectSourceRoot(contractFileName: string): string {
   return "src";
 }
 
+
 /**
- * Scan paths, detect @-prefixed imports, return remappings or null
+ * Fallback: detect remappings from file paths when metadata is not available.
+ * Used for contracts verified without remapping info (e.g., older Hardhat verifications).
  */
-export function detectRemappings(
-  paths: string[],
-): Record<string, string> | null {
-  const remappings: Record<string, string> = {};
+function detectRemappingsFromPaths(paths: string[]): string[] {
+  const remappings = new Set<string>();
 
   for (const path of paths) {
-    let scope: string | null = null;
-
     if (path.startsWith("@")) {
-      // "@openzeppelin/contracts/..." → "@openzeppelin"
-      scope = path.split("/")[0];
+      // "@openzeppelin/contracts/..." → "@openzeppelin/=lib/@openzeppelin/"
+      const scope = path.split("/")[0];
+      remappings.add(`${scope}/=lib/${scope}/`);
     } else if (path.startsWith("node_modules/@")) {
-      // "node_modules/@openzeppelin/contracts/..." → "@openzeppelin"
-      scope = path.split("/")[1];
-    }
-
-    if (scope) {
-      const remapKey = `${scope}/`;
-      if (!remappings[remapKey]) {
-        remappings[remapKey] = `lib/${scope}/`;
-      }
+      // "node_modules/@openzeppelin/contracts/..." → "@openzeppelin/=node_modules/@openzeppelin/"
+      const scope = path.split("/")[1];
+      remappings.add(`${scope}/=node_modules/${scope}/`);
     }
   }
 
-  return Object.keys(remappings).length > 0 ? remappings : null;
-}
-
-/**
- * Transform paths:
- * - "@openzeppelin/..." → "lib/@openzeppelin/..."
- * - "node_modules/@openzeppelin/..." → "lib/@openzeppelin/..."
- */
-export function transformPath(originalPath: string): string {
-  if (originalPath.startsWith("@")) {
-    return `lib/${originalPath}`;
-  }
-  if (originalPath.startsWith("node_modules/@")) {
-    return `lib/${originalPath.slice("node_modules/".length)}`;
-  }
-  return originalPath;
+  return Array.from(remappings);
 }
 
 /**
@@ -212,8 +206,11 @@ export function generateFoundryConfig(
   srcDir: string,
   address: string,
   networkData: Network,
+  hasNodeModules = false,
 ): string {
   const solcVersion = parseCompilerVersion(meta.compilerVersion);
+
+  const libsValue = hasNodeModules ? '["lib", "node_modules"]' : '["lib"]';
 
   const lines = [
     "# Auto-generated by evm-mirror clone",
@@ -224,7 +221,7 @@ export function generateFoundryConfig(
     "[profile.default]",
     `src = "${srcDir}"`,
     'out = "out"',
-    'libs = ["lib"]',
+    `libs = ${libsValue}`,
     `solc = "${solcVersion}"`,
   ];
 

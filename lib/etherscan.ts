@@ -63,6 +63,7 @@ function parseVerifiedSources(
       evmVersion: sourceResult.EVMVersion,
       contractFileName: sourceResult.ContractFileName,
       contractName: sourceResult.ContractName,
+      remappings: [],
     },
   };
 
@@ -81,6 +82,10 @@ function parseVerifiedSources(
         for (const path in jsonInput.sources) {
           result.sources[path] = jsonInput.sources[path].content;
         }
+      }
+      // Extract remappings from compiler settings
+      if (jsonInput.settings?.remappings) {
+        result.meta.remappings = jsonInput.settings.remappings;
       }
     } catch (error) {
       console.error(red("Failed to parse Solidity JSON-Input:"), error);
@@ -122,5 +127,8 @@ type EtherscanSourceSet = {
     [key: string]: {
       content: string;
     };
+  };
+  settings?: {
+    remappings?: string[];
   };
 };
