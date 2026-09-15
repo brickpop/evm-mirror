@@ -1,5 +1,7 @@
 # EVM Mirror
 
+The main repo lives on https://github.com/aragon/evm-mirror
+
 **EVM Mirror** is a CLI tool that checks whether the code of an EVM smart contract matches a known snapshot. It retrieves the verified sources from Etherscan (or compatible) and compares each file against a given reference.
 
 - Verifying that the deployed code matches an exact Git commit or an audit.
